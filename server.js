@@ -150,6 +150,15 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
+app.get('/', (req, res) => {
+  res.json({
+    status: 200,
+    author: 'Yudzxml',
+    message: '✅ API aktif dan berjalan dengan baik.',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.listen(8080, () => {
-  console.log('🍪 Server cookie berjalan di http://localhost:8080/cookies?url=');
+  console.log('🍪 Server cookie berjalan di port: 8080');
 });
