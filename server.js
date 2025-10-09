@@ -150,6 +150,6 @@ app.get('/proxy', async (req, res) => {
   }
 });
 
-app.listen(3000, () => {
-  console.log('🍪 Server cookie berjalan di http://localhost:3000/cookies?url=');
+app.listen(8080, () => {
+  console.log('🍪 Server cookie berjalan di http://localhost:8080/cookies?url=');
 });
