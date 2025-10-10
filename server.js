@@ -1,20 +1,30 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const puppeteer = require('puppeteer');
+const { chromium } = require('playwright');
 const express = require('express');
 
 const app = express();
 const COOKIE_FILE = path.resolve(__dirname, 'cookies.json');
 
+function log(...msg) {
+  console.log(`[${new Date().toLocaleTimeString()}]`, ...msg);
+}
+
 function loadCookies() {
   try {
-    if (fs.existsSync(COOKIE_FILE)) return JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf-8'));
-  } catch {}
+    if (fs.existsSync(COOKIE_FILE)) {
+      log('🔹 Memuat cookies dari file lokal');
+      return JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf-8'));
+    }
+  } catch (e) {
+    log('⚠️ Gagal memuat cookies:', e.message);
+  }
   return {};
 }
 
 function saveCookies(domain, cookies) {
+  log('💾 Menyimpan cookies untuk domain:', domain);
   const data = loadCookies();
   data[domain] = { cookies, updated: new Date().toISOString() };
   fs.writeFileSync(COOKIE_FILE, JSON.stringify(data, null, 2));
@@ -25,18 +35,21 @@ function cookieToHeader(cookies) {
 }
 
 async function validateCookies(url, cookies) {
+  log('🔍 Memvalidasi cookies ke:', url);
   try {
     const res = await axios.get(url, {
       headers: {
         Cookie: cookieToHeader(cookies),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122 Safari/537.36'
       },
       maxRedirects: 0,
       validateStatus: (s) => s < 400,
       timeout: 15000
     });
+    log('✅ Validasi cookies:', res.status);
     return res.status < 400;
-  } catch {
+  } catch (e) {
+    log('❌ Validasi gagal:', e.message);
     return false;
   }
 }
@@ -57,69 +70,161 @@ function normalizeProxy(proxy) {
     creds = c;
     hostPort = hp;
   }
+  log('🌐 Proxy terdeteksi:', proxy);
   return { original: proxy, proto, creds, hostPort };
 }
 
-async function fetchCfCookies(url, opts = {}) {
-  const { timeout = 120000, waitInterval = 800, headless = true, userAgent = null, proxy = null, viewport = { width: 1366, height: 768 }, extraArgs = [] } = opts;
+async function fetchCfCookiesPlaywright(url, opts = {}) {
+  const {
+    timeout = 120000,
+    waitInterval = 800,
+    headless = true,
+    userAgent = null,
+    proxy = null,
+    viewport = { width: 1366, height: 768 },
+    extraArgs = []
+  } = opts;
+
   const parsedProxy = normalizeProxy(proxy);
-  const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-first-run', '--no-zygote', '--single-process', ...extraArgs];
-  if (parsedProxy) {
-    const proxyArg = parsedProxy.proto && parsedProxy.proto.length > 0 ? `${parsedProxy.proto}${parsedProxy.hostPort}` : parsedProxy.hostPort;
-    args.push(`--proxy-server=${proxyArg}`);
+  log('🚀 Meluncurkan Playwright Browser (headless:', headless, ')');
+
+  const launchOptions = {
+    headless,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-blink-features=AutomationControlled',
+      ...extraArgs
+    ],
+    ignoreDefaultArgs: ['--enable-automation']
+  };
+
+  if (parsedProxy && parsedProxy.hostPort) {
+    const server = parsedProxy.proto && parsedProxy.proto.length > 0
+      ? `${parsedProxy.proto}${parsedProxy.hostPort}`
+      : parsedProxy.hostPort;
+    launchOptions.proxy = { server };
+    log('🧭 Menggunakan proxy:', server);
   }
-  const browser = await puppeteer.launch({ headless, args, ignoreHTTPSErrors: true });
-  const page = await browser.newPage();
+
+  const browser = await chromium.launch(launchOptions);
+
   try {
-    await page.setViewport(viewport);
-    await page.setUserAgent(userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36');
-    await page.setExtraHTTPHeaders({ 'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7', referer: new URL(url).origin });
-    if (parsedProxy && parsedProxy.creds) {
-      const [username, password] = parsedProxy.creds.split(':');
-      if (username) {
-        try { await page.authenticate({ username, password }); } catch {}
-      }
+    const contextOptions = {
+      viewport,
+      userAgent: userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120 Safari/537.36',
+      locale: 'id-ID'
+    };
+
+    const context = await browser.newContext(contextOptions);
+    const page = await context.newPage();
+    log('📄 Membuka halaman:', url);
+
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.defineProperty(navigator, 'languages', { get: () => ['id-ID', 'id', 'en-US', 'en'] });
+      Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+      try { Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] }); } catch (e) {}
+    });
+
+    await page.setExtraHTTPHeaders({
+      'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+      referer: new URL(url).origin
+    });
+
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      log('🌍 Halaman dimuat, memulai pemantauan cookies...');
+    } catch (e) {
+      log('⚠️ Gagal memuat halaman:', e.message);
     }
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
+
     const start = Date.now();
-    let cookies = [];
+    let collectedCookies = [];
+
     while (Date.now() - start < timeout) {
-      cookies = await page.cookies().catch(() => []);
-      const hasCf = cookies.some((c) => ['__cf_bm', 'cf_clearance', '__cfduid'].includes(c.name));
-      if (hasCf) break;
-      const challengeFrame = await page.$('iframe[src*="turnstile"], iframe[src*="challenges.cloudflare.com"]');
-      if (challengeFrame) {
-        const frame = await challengeFrame.contentFrame();
-        if (frame) {
-          const checkbox = await frame.$('input[type="checkbox"]');
-          if (checkbox) await checkbox.click().catch(() => {});
-        }
+      const cookiesNow = await context.cookies().catch(() => []);
+      const hasCf = cookiesNow.some((c) => ['__cf_bm', 'cf_clearance', '__cfduid'].includes(c.name));
+      if (hasCf) {
+        collectedCookies = cookiesNow;
+        log('🍪 Cookies Cloudflare ditemukan!');
+        break;
       }
-      const title = (await page.title().catch(() => '')).toLowerCase();
-      if (!/just a moment|checking your browser|please wait|verify you are human/.test(title)) break;
+
+      const frames = page.frames();
+      let handled = false;
+      for (const f of frames) {
+        const fUrl = f.url() || '';
+        if (fUrl.includes('turnstile') || fUrl.includes('challenges.cloudflare.com') || fUrl.includes('challenge')) {
+          log('🧩 Deteksi challenge Cloudflare di:', fUrl);
+          try {
+            const btn = await f.$('button, input[type="checkbox"], div[role="button"], iframe');
+            if (btn) {
+              log('🤖 Mencoba klik tombol verifikasi...');
+              await btn.click({ delay: 100 }).catch(() => {});
+              handled = true;
+            }
+          } catch (err) {
+            log('❌ Gagal klik challenge:', err.message);
+          }
+        }
+        if (handled) break;
+      }
+
+      await page.mouse.move(100 + Math.random() * 400, 100 + Math.random() * 400, { steps: 8 }).catch(() => {});
       await new Promise((r) => setTimeout(r, waitInterval));
     }
-    await new Promise((r) => setTimeout(r, 1000));
-    const finalCookies = await page.cookies().catch(() => []);
+
+    await page.waitForTimeout(1000).catch(() => {});
+    const finalCookies = await context.cookies().catch(() => []);
+    log('📦 Total cookies terkumpul:', finalCookies.length);
+
+    await context.close();
     await browser.close();
-    if (!finalCookies || finalCookies.length === 0) throw new Error('Tidak mendapatkan cookies dari Puppeteer');
-    return finalCookies;
+
+    if (!finalCookies || finalCookies.length === 0) throw new Error('Tidak mendapatkan cookies dari Playwright');
+
+    const norm = finalCookies.map(c => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path,
+      expires: c.expires,
+      httpOnly: c.httpOnly,
+      secure: c.secure
+    }));
+
+    log('✅ Pengambilan cookies berhasil');
+    return norm;
   } catch (e) {
+    log('❌ Gagal ambil cookies:', e.message);
     try { await browser.close(); } catch {}
-    throw new Error('Gagal ambil cookies Cloudflare: ' + e.message);
+    throw new Error('Gagal ambil cookies Playwright: ' + (e && e.message ? e.message : e));
   }
 }
 
 async function getCookies(url, opts = {}) {
   const domain = new URL(url).hostname;
+  log('🔸 Proses pengambilan cookies untuk:', domain);
   const cache = loadCookies();
   const cached = cache[domain]?.cookies;
   if (cached) {
+    log('📂 Cookies ditemukan di cache, memvalidasi...');
     const valid = await validateCookies(url, cached);
-    if (valid) return cached;
+    if (valid) {
+      log('✅ Cookies cache masih valid');
+      return cached;
+    } else {
+      log('🧹 Cookies cache tidak valid, mengambil baru...');
+    }
+  } else {
+    log('📭 Tidak ada cookies cache, mengambil baru...');
   }
-  const freshCookies = await fetchCfCookies(url, opts);
-  if (!freshCookies || freshCookies.length === 0) throw new Error('Tidak mendapatkan cookies dari Puppeteer');
+
+  const freshCookies = await fetchCfCookiesPlaywright(url, opts);
+  if (!freshCookies || freshCookies.length === 0) throw new Error('Tidak mendapatkan cookies dari Playwright');
   saveCookies(domain, freshCookies);
   return freshCookies;
 }
@@ -134,8 +239,10 @@ app.get('/proxy', async (req, res) => {
     waitInterval: waitInterval ? parseInt(waitInterval, 10) : undefined,
     userAgent: userAgent || undefined
   };
+  log('⚙️ Memulai proses /proxy dengan opsi:', opts);
   try {
     const cookies = await getCookies(url, opts);
+    log('🎉 Proses selesai, mengirim hasil JSON');
     res.json({
       status: 200,
       domain: new URL(url).hostname,
@@ -145,12 +252,14 @@ app.get('/proxy', async (req, res) => {
       usedOptions: opts
     });
   } catch (err) {
+    log('💥 Gagal dalam endpoint /proxy:', err.message);
     res.status(500).json({ status: 500, error: 'Gagal mengambil cookies: ' + err.message });
   }
 });
 
 app.get('/', (req, res) => {
+  log('📡 Akses ke endpoint utama');
   res.json({ status: 200, author: 'Yudzxml', message: '✅ API aktif dan berjalan dengan baik.', timestamp: new Date().toISOString() });
 });
 
-app.listen(8080, () => console.log('🍪 Server cookie berjalan di port: 8080'));
+app.listen(8080, () => log('🍪 Server cookie (Playwright) berjalan di port: 8080'));
