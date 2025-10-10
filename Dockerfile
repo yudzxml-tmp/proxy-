@@ -1,21 +1,27 @@
-# Gunakan base image Node.js dengan Playwright dependencies
-FROM mcr.microsoft.com/playwright:v1.47.2-jammy
+# Gunakan base image Playwright versi terbaru yang sudah include Chromium, Firefox, dan WebKit
+FROM mcr.microsoft.com/playwright:v1.56.0-jammy
 
-# Set working directory
+# Set direktori kerja
 WORKDIR /app
 
-# Salin package.json dan install dependencies
+# Salin file package.json dan package-lock.json
 COPY package*.json ./
-RUN npm install --omit=dev
 
-# Salin seluruh file project ke dalam container
+# Install dependencies (tanpa devDependencies untuk image yang lebih ringan)
+RUN npm ci --omit=dev
+
+# Salin seluruh project ke dalam container
 COPY . .
 
-# Variabel environment agar Playwright tahu path Chromium
+# Set environment variable untuk memastikan Playwright pakai browser bawaan
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PUPPETEER_EXECUTABLE_PATH=/ms-playwright/chromium-1194/chrome-linux/chrome
 ENV NODE_ENV=production
 
-# Port default server Express kamu
+# Pastikan Playwright sudah menginstall semua browser dependencies
+RUN npx playwright install --with-deps chromium
+
+# Expose port server Express kamu
 EXPOSE 8080
 
 # Jalankan server
