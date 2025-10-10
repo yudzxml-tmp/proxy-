@@ -1,7 +1,7 @@
 {
   "name": "cf-cookie-server",
   "version": "1.0.0",
-  "description": "Server untuk mengambil cookies dari situs dengan proteksi Cloudflare menggunakan Puppeteer.",
+  "description": "Server untuk mengambil cookies dari situs dengan proteksi Cloudflare menggunakan Puppeteer (stealth).",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,7 +9,9 @@
   "dependencies": {
     "axios": "^1.7.3",
     "express": "^4.19.2",
-    "puppeteer": "^22.13.1"
+    "puppeteer": "^22.13.1",
+    "puppeteer-extra": "^3.3.4",
+    "puppeteer-extra-plugin-stealth": "^2.11.1"
   },
   "author": "Yudzxml",
   "license": "MIT"
