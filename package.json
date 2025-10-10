@@ -1,16 +1,19 @@
 {
-  "name": "cf-cookie-server",
-  "version": "1.0.0",
-  "description": "Server untuk mengambil cookies dari situs dengan proteksi Cloudflare menggunakan Playwright (otomatisasi headless browser).",
-  "main": "server.js",
+  "name": "bycf-api",
+  "version": "1.1.0",
+  "description": "API gateway bycf untuk bypass Cloudflare dan fetch sumber aman.",
+  "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.7.3",
+    "bycf": "^1.0.1",
+    "cors": "^2.8.5",
     "express": "^4.19.2",
-    "playwright": "^1.47.2"
+    "helmet": "^7.1.0"
   },
-  "author": "Yudzxml",
-  "license": "MIT"
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

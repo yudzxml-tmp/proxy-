@@ -1,24 +1,25 @@
-# Gunakan base image Playwright versi terbaru
-FROM mcr.microsoft.com/playwright:v1.56.0-jammy
+# Gunakan base image Node.js yang ringan
+FROM node:20-alpine
 
+# Set working directory di dalam container
 WORKDIR /app
 
-# Salin package.json (tanpa lock)
+# Salin file package.json dan package-lock.json (kalau ada)
 COPY package*.json ./
 
-# Install dependencies (tanpa dev)
-RUN npm install --omit=dev
+# Install dependencies secara efisien
+RUN npm install --production
 
-# Salin semua file project
+# Salin semua source code ke dalam container
 COPY . .
 
-# Pastikan Chromium terinstall
-RUN npx playwright install --with-deps chromium
-
-# Set environment
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Set environment default (bisa di-override nanti)
+ENV PORT=8080
+ENV DEFAULT_PROXY=""
 ENV NODE_ENV=production
 
+# Expose port aplikasi
 EXPOSE 8080
 
+# Jalankan server
 CMD ["node", "server.js"]
