@@ -2,15 +2,19 @@ import express from "express";
 import helmet from "helmet";
 import cors from "cors";
 import { shannz as cf } from "bycf";
+import { chromium } from "playwright-extra";
+import stealth from "playwright-extra-plugin-stealth";
+import userAgents from "user-agents";
+
+chromium.use(stealth());
 
 const app = express();
-
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
 const PORT = process.env.PORT || 8080;
-const DEFAULT_PROXY = process.env.DEFAULT_PROXY || ""; 
+const DEFAULT_PROXY = process.env.DEFAULT_PROXY || "";
 
 function resolveProxy(reqBody = {}, reqHeaders = {}) {
   if (reqBody.proxy && String(reqBody.proxy).trim()) return String(reqBody.proxy).trim();
@@ -24,85 +28,202 @@ function respondError(res, err) {
   return res.status(500).json({ success: false, error: message });
 }
 
-app.get("/", (req, res) => {
-  res.json({ status: "ok", message: "bycf API aktif 🚀" });
-});
+function getRandomUserAgent() {
+  try {
+    return new userAgents().toString();
+  } catch {
+    return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
+  }
+}
 
-// WAF session
+const preloadScript = `
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (params) =>
+  params.name === 'notifications' ?
+    Promise.resolve({ state: Notification.permission }) :
+    originalQuery(params);
+window.chrome = { runtime: {} };
+`;
+
+async function fetchWithRetries(page, url, options = {}) {
+  const { attempts = 2, waitUntil = "networkidle", timeout = 45000, waitForSelector } = options;
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await page.goto(url, { waitUntil, timeout });
+      if (waitForSelector) {
+        await page.waitForSelector(waitForSelector, { timeout: Math.max(5000, timeout / 3) });
+      } else {
+        await page.waitForTimeout(500);
+      }
+      return { success: true, html: await page.content() };
+    } catch (err) {
+      lastErr = err;
+      await page.waitForTimeout(500 + i * 500);
+    }
+  }
+  return { success: false, error: lastErr };
+}
+
+// ====== API BASIC ======
+app.get("/", (req, res) => res.json({ status: "ok", message: "bycf API aktif 🚀" }));
+
 app.post("/wafsession", async (req, res) => {
   const { url } = req.body || {};
-  if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
+  if (!url?.trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
   const proxy = resolveProxy(req.body, req.headers);
   try {
     const session = proxy ? await cf.wafSession(url, proxy) : await cf.wafSession(url);
-    return res.json({ success: true, data: session });
+    res.json({ success: true, data: session });
   } catch (err) {
-    return respondError(res, err);
+    respondError(res, err);
   }
 });
 
-// Turnstile - minimal (inject)
 app.post("/turnstile-min", async (req, res) => {
   const { url, siteKey } = req.body || {};
-  if (!url || !String(url).trim() || !siteKey || !String(siteKey).trim())
-    return res.status(400).json({ success: false, error: "url & siteKey diperlukan" });
-
+  if (!url?.trim() || !siteKey?.trim()) return res.status(400).json({ success: false, error: "url & siteKey diperlukan" });
   const proxy = resolveProxy(req.body, req.headers);
   try {
     const token = proxy ? await cf.turnstileMin(url, siteKey, proxy) : await cf.turnstileMin(url, siteKey);
-    return res.json({ success: true, token });
+    res.json({ success: true, token });
   } catch (err) {
-    return respondError(res, err);
+    respondError(res, err);
   }
 });
 
-// Turnstile - max (full simulation)
 app.post("/turnstile-max", async (req, res) => {
   const { url } = req.body || {};
-  if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
-
+  if (!url?.trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
   const proxy = resolveProxy(req.body, req.headers);
   try {
     const token = proxy ? await cf.turnstileMax(url, proxy) : await cf.turnstileMax(url);
-    return res.json({ success: true, token });
+    res.json({ success: true, token });
   } catch (err) {
-    return respondError(res, err);
+    respondError(res, err);
   }
 });
 
-// Source (rendered HTML)
 app.post("/source", async (req, res) => {
   const { url } = req.body || {};
-  if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
-
+  if (!url?.trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
   const proxy = resolveProxy(req.body, req.headers);
   try {
     const html = proxy ? await cf.source(url, proxy) : await cf.source(url);
-    return res.json({ success: true, html });
+    res.json({ success: true, html });
   } catch (err) {
-    return respondError(res, err);
+    respondError(res, err);
   }
 });
 
-// Stats
 app.get("/stats", async (req, res) => {
   try {
     const stats = await cf.stats();
-    return res.json({ success: true, stats });
+    res.json({ success: true, stats });
   } catch (err) {
-    return respondError(res, err);
+    respondError(res, err);
   }
 });
 
-// small health check that returns which proxy will be used (if ada)
 app.post("/probe", (req, res) => {
   const proxy = resolveProxy(req.body, req.headers);
   res.json({ success: true, proxy: proxy || null });
 });
 
-app.use((req, res) => {
-  res.status(404).json({ success: false, error: "Endpoint tidak ditemukan" });
+// ====== PLAYWRIGHT ======
+app.get("/api/getsource", async (req, res) => {
+  const { url, proxy, selector, ua } = req.query;
+  if (!url) return res.status(400).json({ success: false, message: "URL diperlukan" });
+
+  const launchOptions = {
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--disable-gpu",
+      "--disable-blink-features=AutomationControlled",
+    ],
+  };
+  if (proxy) launchOptions.proxy = { server: proxy };
+
+  let browser;
+  try {
+    browser = await chromium.launch(launchOptions);
+    const context = await browser.newContext({
+      userAgent: ua || getRandomUserAgent(),
+      viewport: { width: 1366, height: 768 },
+      locale: "en-US",
+      extraHTTPHeaders: {
+        "accept-language": "en-US,en;q=0.9",
+        "referer": new URL(url).origin,
+        "sec-ch-ua": '"Chromium";v="121", "Not A(Brand";v="8"',
+        "sec-ch-ua-platform": '"Windows"',
+      },
+    });
+
+    await context.addInitScript({ content: preloadScript });
+    const page = await context.newPage();
+
+    const result = await fetchWithRetries(page, url, {
+      attempts: 3,
+      waitUntil: "networkidle",
+      timeout: 45000,
+      waitForSelector: selector
+    });
+
+    if (!result.success) throw new Error(result.error?.message || "Unknown error");
+
+    res.json({ success: true, url: page.url(), html: result.html });
+    await browser.close();
+  } catch (err) {
+    if (browser) await browser.close();
+    res.status(500).json({ success: false, message: `Gagal ambil source: ${err.message}` });
+  }
 });
+
+app.get("/api/getcookies", async (req, res) => {
+  const { url, proxy, ua } = req.query;
+  if (!url) return res.status(400).json({ success: false, message: "URL diperlukan" });
+
+  const launchOptions = {
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--disable-gpu",
+      "--disable-blink-features=AutomationControlled",
+    ],
+  };
+  if (proxy) launchOptions.proxy = { server: proxy };
+
+  let browser;
+  try {
+    browser = await chromium.launch(launchOptions);
+    const context = await browser.newContext({
+      userAgent: ua || getRandomUserAgent(),
+      viewport: { width: 1366, height: 768 },
+    });
+
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: "networkidle", timeout: 45000 });
+
+    const cookies = await context.cookies();
+    res.json({ success: true, cookies });
+    await browser.close();
+  } catch (err) {
+    if (browser) await browser.close();
+    res.status(500).json({ success: false, message: `Gagal ambil cookies: ${err.message}` });
+  }
+});
+
+app.use((req, res) => res.status(404).json({ success: false, error: "Endpoint tidak ditemukan" }));
 
 app.listen(PORT, () => {
   console.log(`⚡ bycf API aktif di port ${PORT}`);

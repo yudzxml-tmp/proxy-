@@ -1,25 +1,29 @@
-# Gunakan base image Node.js yang ringan
-FROM node:20-alpine
+# Gunakan Playwright base image (sudah ada browser + dependencies)
+FROM mcr.microsoft.com/playwright:latest
 
-# Set working directory di dalam container
+# Set working directory
 WORKDIR /app
 
-# Salin file package.json dan package-lock.json (kalau ada)
+# Copy package.json & package-lock.json dulu (memanfaatkan cache layer)
 COPY package*.json ./
 
-# Install dependencies secara efisien
-RUN npm install --production
+# Install dependencies tanpa audit & lebih cepat
+RUN npm ci --no-audit --prefer-offline
 
-# Salin semua source code ke dalam container
+# Copy seluruh source code
 COPY . .
 
-# Set environment default (bisa di-override nanti)
-ENV PORT=8080
-ENV DEFAULT_PROXY=""
-ENV NODE_ENV=production
-
-# Expose port aplikasi
+# Pastikan package.json type module (untuk import/export)
+# EXPOSE port aplikasi
 EXPOSE 8080
 
-# Jalankan server
+# Healthcheck: pastikan Chromium bisa dijalankan
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "import('playwright').then(({chromium})=>chromium.launch().then(b=>b.close()).then(()=>process.exit(0)).catch(e=>{console.error(e); process.exit(1)}))"
+
+# Environment variables default (opsional)
+ENV NODE_ENV=production
+ENV PORT=8080
+
+# Start server
 CMD ["node", "server.js"]
