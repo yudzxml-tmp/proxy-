@@ -3,10 +3,7 @@ import helmet from "helmet";
 import cors from "cors";
 import { shannz as cf } from "bycf";
 import { chromium } from "@divriots/playwright-extra";
-import stealth from "playwright-extra-plugin-stealth";
 import userAgents from "user-agents";
-
-chromium.use(stealth());
 
 const app = express();
 app.use(helmet());
