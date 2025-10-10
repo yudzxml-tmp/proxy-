@@ -18,7 +18,6 @@
     "helmet": "^7.1.0",
     "playwright": "^1.37.0",
     "@divriots/playwright-extra": "^4.3.6-1",
-    "playwright-extra-plugin-stealth": "^2.8.0",
     "user-agents": "^1.0.710"
   },
   "devDependencies": {
