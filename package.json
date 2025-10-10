@@ -20,7 +20,7 @@
   "playwright-extra-plugin-stealth": "^2.8.0",
   "user-agents": "^1.0.710",
   "dotenv": "^16.3.1"
-}
+},
   "devDependencies": {
     "nodemon": "^2.0.22",
     "eslint": "^8.47.0",
