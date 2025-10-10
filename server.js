@@ -24,6 +24,12 @@ function respondError(res, err) {
   return res.status(500).json({ success: false, error: message });
 }
 
+// Helper untuk ambil param dari body atau query, sekaligus decode
+function getParam(req, key) {
+  const val = (req.body && req.body[key]) || (req.query && req.query[key]);
+  return val ? decodeURIComponent(String(val)) : null;
+}
+
 // Health check
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "bycf API aktif 🚀" });
@@ -31,8 +37,8 @@ app.get("/", (req, res) => {
 
 // WAF session (POST & GET)
 async function handleWafSession(req, res) {
-  const { url } = req.body || req.query || {};
-  if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
+  const url = getParam(req, "url");
+  if (!url) return res.status(400).json({ success: false, error: "url diperlukan" });
   const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
     const session = proxy ? await cf.wafSession(url, proxy) : await cf.wafSession(url);
@@ -46,8 +52,9 @@ app.get("/wafsession", handleWafSession);
 
 // Turnstile - minimal (POST & GET)
 async function handleTurnstileMin(req, res) {
-  const { url, siteKey } = req.body || req.query || {};
-  if (!url || !String(url).trim() || !siteKey || !String(siteKey).trim())
+  const url = getParam(req, "url");
+  const siteKey = getParam(req, "siteKey");
+  if (!url || !siteKey)
     return res.status(400).json({ success: false, error: "url & siteKey diperlukan" });
   const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
@@ -62,8 +69,8 @@ app.get("/turnstile-min", handleTurnstileMin);
 
 // Turnstile - max (POST & GET)
 async function handleTurnstileMax(req, res) {
-  const { url } = req.body || req.query || {};
-  if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
+  const url = getParam(req, "url");
+  if (!url) return res.status(400).json({ success: false, error: "url diperlukan" });
   const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
     const token = proxy ? await cf.turnstileMax(url, proxy) : await cf.turnstileMax(url);
@@ -77,8 +84,8 @@ app.get("/turnstile-max", handleTurnstileMax);
 
 // Source (POST & GET)
 async function handleSource(req, res) {
-  const { url } = req.body || req.query || {};
-  if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
+  const url = getParam(req, "url");
+  if (!url) return res.status(400).json({ success: false, error: "url diperlukan" });
   const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
     const html = proxy ? await cf.source(url, proxy) : await cf.source(url);
