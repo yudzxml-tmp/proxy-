@@ -1,20 +1,15 @@
-const fs = require("fs");
-const path = require("path");
-const axios = require("axios");
-const puppeteer = require("puppeteer-extra");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-const express = require("express");
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const puppeteer = require('puppeteer');
+const express = require('express');
 
-puppeteer.use(StealthPlugin());
 const app = express();
-const COOKIE_FILE = path.resolve(__dirname, "cookies.json");
+const COOKIE_FILE = path.resolve(__dirname, 'cookies.json');
 
-// -------------------- Helper File Cookies --------------------
 function loadCookies() {
   try {
-    if (fs.existsSync(COOKIE_FILE)) {
-      return JSON.parse(fs.readFileSync(COOKIE_FILE, "utf-8"));
-    }
+    if (fs.existsSync(COOKIE_FILE)) return JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf-8'));
   } catch {}
   return {};
 }
@@ -26,49 +21,15 @@ function saveCookies(domain, cookies) {
 }
 
 function cookieToHeader(cookies) {
-  return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
 }
 
-// -------------------- Proxy Validator --------------------
-async function checkProxy(proxy) {
-  if (!proxy) return null;
-
-  const proxyUrl = proxy.includes("://") ? proxy : `http://${proxy}`;
-  try {
-    const res = await axios.get("http://httpbin.org/ip", {
-      proxy: false,
-      timeout: 7000,
-      httpsAgent: false,
-      httpAgent: false,
-      headers: { "User-Agent": "curl/8.0" },
-      validateStatus: () => true,
-      transport: {
-        request: (options, callback) => {
-          const net = require("net");
-          const [host, port] = proxy.replace(/.*@/, "").split(":");
-          const socket = net.connect(port, host);
-          socket.on("connect", () => {
-            socket.destroy();
-            callback(null, { statusCode: 200 });
-          });
-          socket.on("error", () => callback(new Error("Proxy unreachable")));
-        },
-      },
-    });
-    return res.status === 200;
-  } catch {
-    return false;
-  }
-}
-
-// -------------------- Cookie Validator --------------------
 async function validateCookies(url, cookies) {
   try {
     const res = await axios.get(url, {
       headers: {
         Cookie: cookieToHeader(cookies),
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36",
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36',
       },
       maxRedirects: 0,
       validateStatus: (s) => s < 400,
@@ -80,172 +41,139 @@ async function validateCookies(url, cookies) {
   }
 }
 
-async function delay(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function randomHumanMouse(page, duration = 2000) {
-  const viewport = page.viewport() || { width: 1200, height: 800 };
-  const end = Date.now() + duration;
-  let prev = { x: Math.floor(viewport.width / 2), y: Math.floor(viewport.height / 2) };
-  try {
-    await page.mouse.move(prev.x, prev.y);
-    while (Date.now() < end) {
-      const nx = Math.max(1, Math.min(viewport.width - 1, prev.x + Math.floor((Math.random() - 0.5) * 200)));
-      const ny = Math.max(1, Math.min(viewport.height - 1, prev.y + Math.floor((Math.random() - 0.5) * 120)));
-      await page.mouse.move(nx, ny, { steps: Math.floor(5 + Math.random() * 10) });
-      prev = { x: nx, y: ny };
-      await delay(150 + Math.floor(Math.random() * 300));
-    }
-  } catch {}
-}
-
-// -------------------- Puppeteer Fetch Cloudflare Cookies --------------------
-async function fetchCfCookies(url, opts = {}) {
-  const {
-    timeout = 90000,
-    waitInterval = 800,
-    userAgent = null,
-    proxy = null,
-    screenshotOnFailure = false,
-  } = opts;
-
-  // Validasi proxy sebelum digunakan
-  if (proxy) {
-    const validProxy = await checkProxy(proxy);
-    if (!validProxy) throw new Error(`Proxy tidak valid atau tidak dapat dijangkau: ${proxy}`);
+function normalizeProxy(proxy) {
+  if (!proxy) return null;
+  let proto = '';
+  let p = proxy;
+  if (proxy.startsWith('http://') || proxy.startsWith('https://') || proxy.startsWith('socks5://')) {
+    const idx = proxy.indexOf('://');
+    proto = proxy.slice(0, idx + 3);
+    p = proxy.slice(idx + 3);
   }
+  let creds = null;
+  let hostPort = p;
+  if (p.includes('@')) {
+    const [c, hp] = p.split('@');
+    creds = c;
+    hostPort = hp;
+  }
+  return { original: proxy, proto, creds, hostPort };
+}
 
-  const args = [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-accelerated-2d-canvas",
-    "--no-first-run",
-    "--no-zygote",
-    "--single-process",
-    "--disable-gpu",
-    "--window-size=1366,768",
-  ];
-  if (proxy) args.push(`--proxy-server=${proxy}`);
-
-  const browser = await puppeteer.launch({
-    headless: true, // ✅ paksa selalu headless
-    args,
-    ignoreHTTPSErrors: true,
-  });
-
+async function fetchCfCookies(url, opts = {}) {
+  const { timeout = 120000, waitInterval = 800, headless = true, userAgent = null, proxy = null, viewport = { width: 1366, height: 768 }, extraArgs = [] } = opts;
+  const parsedProxy = normalizeProxy(proxy);
+  const args = ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--single-process', '--disable-gpu', ...extraArgs];
+  if (parsedProxy) {
+    const proxyArg = parsedProxy.proto && parsedProxy.proto.length > 0 ? `${parsedProxy.proto}${parsedProxy.hostPort}` : parsedProxy.hostPort;
+    args.push(`--proxy-server=${proxyArg}`);
+    console.log(`🌐 [fetchCfCookies] using proxy arg: ${proxyArg}`);
+  }
+  const browser = await puppeteer.launch({ headless, args, ignoreHTTPSErrors: true });
   const page = await browser.newPage();
-
   try {
-    await page.setUserAgent(
-      userAgent ||
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
-    );
-
-    await page.setExtraHTTPHeaders({
-      "accept-language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-      referer: new URL(url).origin,
-    });
-
-    await page.setViewport({ width: 1366, height: 768 });
-
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => false });
-      Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-      Object.defineProperty(navigator, "languages", { get: () => ["id-ID", "en-US"] });
-    });
-
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
-
+    await page.setViewport(viewport);
+    await page.setUserAgent(userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36');
+    await page.setExtraHTTPHeaders({ 'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7', referer: new URL(url).origin });
+    if (parsedProxy && parsedProxy.creds) {
+      const [username, password] = parsedProxy.creds.split(':');
+      if (username) {
+        try {
+          await page.authenticate({ username, password });
+          console.log('🔐 Proxy authentication applied');
+        } catch (e) {
+          console.warn('⚠️ Gagal set proxy auth:', e.message);
+        }
+      }
+    }
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch((e) => console.warn('goto warning:', e.message));
     const start = Date.now();
     let cookies = [];
-
+    let lastLog = Date.now();
     while (Date.now() - start < timeout) {
-      cookies = await page.cookies();
-
-      const hasCfCookie = cookies.some((c) =>
-        ["__cf_bm", "cf_clearance", "__cfduid", "_cfuvid"].includes(c.name)
-      );
-      if (hasCfCookie) break;
-
-      const title = (await page.title()).toLowerCase();
-      const hasChallengeIframe = await page.$("iframe[src*='turnstile'], iframe[src*='cloudflare.com']");
-
-      if (!/just a moment|checking your browser/i.test(title) && !hasChallengeIframe) break;
-
-      await randomHumanMouse(page, hasChallengeIframe ? 1800 : 700);
-      await delay(waitInterval);
+      try {
+        if (Date.now() - lastLog > 15000) {
+          try {
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
+            lastLog = Date.now();
+          } catch {}
+        }
+      } catch {}
+      cookies = await page.cookies().catch(() => []);
+      const hasCf = cookies.some((c) => ['__cf_bm', 'cf_clearance', '__cfduid', 'cf_chl_2', 'cf_chl_prog'].includes(c.name));
+      const iframes = await page.$$eval('iframe', (els) => els.map((f) => f.src || '').filter(Boolean)).catch(() => []);
+      const hasTurnstileIframe = iframes.some((s) => /turnstile|challenges.cloudflare|cloudflare.com/.test(s));
+      const title = (await page.title().catch(() => '')).toLowerCase();
+      if (Date.now() - start < 5000) console.log('⏳ initial check:', { hasCf, hasTurnstileIframe, titleSnippet: title.slice(0, 60) });
+      else if (hasCf) console.log('✅ Detected CF cookie(s) while waiting.');
+      else if (hasTurnstileIframe) console.log('🧩 Turnstile/CF challenge iframe detected, waiting longer...');
+      if (hasCf) break;
+      if (!/just a moment|checking your browser|please wait/i.test(title) && !hasTurnstileIframe) break;
+      await new Promise((r) => setTimeout(r, waitInterval));
     }
-
-    await delay(800);
-    const finalCookies = await page.cookies();
+    await new Promise((r) => setTimeout(r, 750));
+    const finalCookies = await page.cookies().catch(() => []);
     await browser.close();
-
-    if (!finalCookies || finalCookies.length === 0)
-      throw new Error("Tidak mendapatkan cookies dari Puppeteer");
-
+    if (!finalCookies || finalCookies.length === 0) throw new Error('Tidak mendapatkan cookies dari Puppeteer (akhir proses).');
     return finalCookies;
   } catch (e) {
-    if (screenshotOnFailure) {
-      await page.screenshot({ path: "error_screenshot.png" });
-    }
     try {
       await browser.close();
     } catch {}
-    throw new Error("Gagal ambil cookies Cloudflare: " + (e.message || e));
+    throw new Error('Gagal ambil cookies Cloudflare: ' + e.message);
   }
 }
 
-// -------------------- Get Cookies (cache + fallback) --------------------
 async function getCookies(url, opts = {}) {
   const domain = new URL(url).hostname;
   const cache = loadCookies();
   const cached = cache[domain]?.cookies;
-
   if (cached) {
-    try {
-      const valid = await validateCookies(url, cached);
-      if (valid) return cached;
-    } catch {}
+    console.log(`🍪 Ditemukan cookies lama untuk ${domain}, cek validitas...`);
+    const valid = await validateCookies(url, cached);
+    if (valid) {
+      console.log('✅ Cookies masih valid, pakai cache.');
+      return cached;
+    }
+    console.log('⚠️ Cookies expired atau tidak valid, ambil ulang...');
+  } else {
+    console.log(`🔍 Tidak ada cookies tersimpan untuk ${domain}.`);
   }
-
   const freshCookies = await fetchCfCookies(url, opts);
-  if (!freshCookies || freshCookies.length === 0) throw new Error("Tidak mendapatkan cookies dari Puppeteer");
+  if (!freshCookies || freshCookies.length === 0) throw new Error('Tidak mendapatkan cookies dari Puppeteer');
   saveCookies(domain, freshCookies);
+  console.log('✅ Cookies baru disimpan.');
   return freshCookies;
 }
 
-// -------------------- Express Route --------------------
-app.get("/api/proxy", async (req, res) => {
-  const { url, proxy } = req.query;
-  if (!url) return res.status(400).json({ status: 400, error: "Parameter ?url= wajib diisi" });
-
+app.get('/proxy', async (req, res) => {
+  const { url, proxy, headless, timeout, waitInterval, userAgent } = req.query;
+  if (!url) return res.status(400).json({ status: 400, error: 'Parameter ?url= wajib diisi' });
+  const opts = {
+    proxy: proxy || null,
+    headless: headless === 'false' ? false : true,
+    timeout: timeout ? parseInt(timeout, 10) : undefined,
+    waitInterval: waitInterval ? parseInt(waitInterval, 10) : undefined,
+    userAgent: userAgent || undefined,
+  };
   try {
-    const cookies = await getCookies(url, { proxy });
+    const cookies = await getCookies(url, opts);
     res.json({
       status: 200,
       domain: new URL(url).hostname,
+      proxy: proxy || 'none',
       cookies,
       cookieHeader: cookieToHeader(cookies),
+      usedOptions: opts,
     });
   } catch (err) {
-    res.status(500).json({
-      status: 500,
-      error: "Gagal mengambil cookies: " + (err.message || err),
-    });
+    console.error('❌ Gagal ambil cookies:', err.message);
+    res.status(500).json({ status: 500, error: 'Gagal mengambil cookies: ' + err.message });
   }
 });
 
-app.get("/", (req, res) => {
-  res.json({
-    status: 200,
-    author: "Yudzxml",
-    message: "API aktif dan berjalan dengan baik.",
-    timestamp: new Date().toISOString(),
-  });
+app.get('/', (req, res) => {
+  res.json({ status: 200, author: 'Yudzxml', message: '✅ API aktif dan berjalan dengan baik.', timestamp: new Date().toISOString() });
 });
 
-app.listen(process.env.PORT || 8080, () => {
-  console.log(`🚀 Server cookie berjalan di port: ${process.env.PORT || 8080}`);
-});
+app.listen(8080, () => console.log('🍪 Server cookie berjalan di port: 8080'));
