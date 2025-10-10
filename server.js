@@ -10,7 +10,7 @@ app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
 const PORT = process.env.PORT || 8080;
-const DEFAULT_PROXY = process.env.DEFAULT_PROXY || ""; 
+const DEFAULT_PROXY = process.env.DEFAULT_PROXY || "";
 
 function resolveProxy(reqBody = {}, reqHeaders = {}) {
   if (reqBody.proxy && String(reqBody.proxy).trim()) return String(reqBody.proxy).trim();
@@ -24,66 +24,73 @@ function respondError(res, err) {
   return res.status(500).json({ success: false, error: message });
 }
 
+// Health check
 app.get("/", (req, res) => {
   res.json({ status: "ok", message: "bycf API aktif 🚀" });
 });
 
-// WAF session
-app.post("/wafsession", async (req, res) => {
-  const { url } = req.body || {};
+// WAF session (POST & GET)
+async function handleWafSession(req, res) {
+  const { url } = req.body || req.query || {};
   if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
-  const proxy = resolveProxy(req.body, req.headers);
+  const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
     const session = proxy ? await cf.wafSession(url, proxy) : await cf.wafSession(url);
     return res.json({ success: true, data: session });
   } catch (err) {
     return respondError(res, err);
   }
-});
+}
+app.post("/wafsession", handleWafSession);
+app.get("/wafsession", handleWafSession);
 
-// Turnstile - minimal (inject)
-app.post("/turnstile-min", async (req, res) => {
-  const { url, siteKey } = req.body || {};
+// Turnstile - minimal (POST & GET)
+async function handleTurnstileMin(req, res) {
+  const { url, siteKey } = req.body || req.query || {};
   if (!url || !String(url).trim() || !siteKey || !String(siteKey).trim())
     return res.status(400).json({ success: false, error: "url & siteKey diperlukan" });
-
-  const proxy = resolveProxy(req.body, req.headers);
+  const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
     const token = proxy ? await cf.turnstileMin(url, siteKey, proxy) : await cf.turnstileMin(url, siteKey);
     return res.json({ success: true, token });
   } catch (err) {
     return respondError(res, err);
   }
-});
+}
+app.post("/turnstile-min", handleTurnstileMin);
+app.get("/turnstile-min", handleTurnstileMin);
 
-// Turnstile - max (full simulation)
-app.post("/turnstile-max", async (req, res) => {
-  const { url } = req.body || {};
+// Turnstile - max (POST & GET)
+async function handleTurnstileMax(req, res) {
+  const { url } = req.body || req.query || {};
   if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
-
-  const proxy = resolveProxy(req.body, req.headers);
+  const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
     const token = proxy ? await cf.turnstileMax(url, proxy) : await cf.turnstileMax(url);
     return res.json({ success: true, token });
   } catch (err) {
     return respondError(res, err);
   }
-});
+}
+app.post("/turnstile-max", handleTurnstileMax);
+app.get("/turnstile-max", handleTurnstileMax);
 
-app.post("/source", async (req, res) => {
-  const { url } = req.body || {};
+// Source (POST & GET)
+async function handleSource(req, res) {
+  const { url } = req.body || req.query || {};
   if (!url || !String(url).trim()) return res.status(400).json({ success: false, error: "url diperlukan" });
-
-  const proxy = resolveProxy(req.body, req.headers);
+  const proxy = resolveProxy(req.body || req.query, req.headers);
   try {
     const html = proxy ? await cf.source(url, proxy) : await cf.source(url);
     return res.json({ success: true, html });
   } catch (err) {
     return respondError(res, err);
   }
-});
+}
+app.post("/source", handleSource);
+app.get("/source", handleSource);
 
-// Stats
+// Stats (GET only)
 app.get("/stats", async (req, res) => {
   try {
     const stats = await cf.stats();
@@ -93,9 +100,13 @@ app.get("/stats", async (req, res) => {
   }
 });
 
-// small health check that returns which proxy will be used (if ada)
+// Probe (POST & GET)
 app.post("/probe", (req, res) => {
   const proxy = resolveProxy(req.body, req.headers);
+  res.json({ success: true, proxy: proxy || null });
+});
+app.get("/probe", (req, res) => {
+  const proxy = resolveProxy(req.query, req.headers);
   res.json({ success: true, proxy: proxy || null });
 });
 
